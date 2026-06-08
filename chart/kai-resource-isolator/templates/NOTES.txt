@@ -1,0 +1,17 @@
+Kai resource isolator is installed in namespace {{ include "kai-resource-isolator.namespace" . }}.
+
+1) Install via OCI registry (no need to clone the repo):
+
+   helm install kai-resource-isolator oci://docker.io/projecthami/kai-resource-isolator \
+     --namespace kai-resource-isolator --create-namespace \
+     --version {{ .Chart.Version }}
+
+2) Ensure GPU nodes receive libvgpu:
+
+   kubectl -n {{ include "kai-resource-isolator.namespace" . }} get daemonset {{ include "kai-resource-isolator.librarySync.fullname" . }}
+
+3) Webhook injects {{ .Values.paths.containerVgpuMount }} (hostPath) and /etc/ld.so.preload for pods that request:
+   {{ .Values.webhook.gpuShareResources }}
+
+   Opt-out a pod: annotation kai-resource-isolator.io/inject: "false"
+   Opt-out a namespace: label kai-resource-isolator.io/webhook=ignore

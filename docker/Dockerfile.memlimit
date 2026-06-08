@@ -1,0 +1,10 @@
+# Stage 1: build the modified webhook
+FROM golang:1.25 AS builder
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/ ./cmd/
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /webhook ./cmd/webhook
+# Stage 2: official image + swapped webhook binary (keeps /artifacts/libvgpu.so)
+FROM projecthami/kai-resource-isolator:v1.0.0
+COPY --from=builder /webhook /webhook
