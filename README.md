@@ -8,16 +8,29 @@ Based on [Project-HAMi/KAI-resource-isolator](https://github.com/Project-HAMi/KA
 
 Upstream `kai-resource-isolator` v1.0.0 injects `libvgpu.so` (HAMi-core) via `ld.so.preload` into pods that carry the KAI `gpu-memory` / `gpu-fraction` annotation, but it does **not** pass the per-pod memory limit to `libvgpu`. HAMi-core reads its cap from the `CUDA_DEVICE_MEMORY_LIMIT` env var, and the KAI binder never sets it — so `libvgpu` loads but enforces nothing (`nvidia-smi` shows the full device memory).
 
-This patch makes the mutating webhook translate the KAI `gpu-memory` annotation (MiB) into
-`CUDA_DEVICE_MEMORY_LIMIT=<value>m` on every container, so `libvgpu` enforces the requested cap.
+This patch makes the mutating webhook translate the KAI resource request into
+`CUDA_DEVICE_MEMORY_LIMIT=<value>m` on every container, so `libvgpu` enforces the requested cap —
+for **both** `gpu-memory` and `gpu-fraction` pods.
 
 ### The change
 
-`cmd/webhook/main.go` — when a pod has the `gpu-memory` annotation, the webhook adds a
-`CUDA_DEVICE_MEMORY_LIMIT=<gpu-memory>m` env var to each (init)container (skipping containers
-that already set it; handling the empty-env-array case). See `appendMemLimitEnvOp`.
+`cmd/webhook/main.go` — the webhook sets `CUDA_DEVICE_MEMORY_LIMIT` on each (init)container
+(skipping containers that already set it; handling the empty-env-array case — see `appendMemLimitEnvOp`):
 
-`gpu-fraction` (compute share) carries no absolute memory value and is intentionally not handled.
+- **`gpu-memory`** (MiB): used directly as `CUDA_DEVICE_MEMORY_LIMIT=<gpu-memory>m`.
+- **`gpu-fraction`** (share, e.g. `0.25`): has no absolute MiB, so it is multiplied by the
+  **per-GPU VRAM** to get `CUDA_DEVICE_MEMORY_LIMIT=<fraction × per-GPU-VRAM>m`.
+
+`cmd/webhook/vram.go` — the per-GPU VRAM basis is **autodetected** from the `nvidia.com/gpu.memory`
+node label (GPU Feature Discovery): a homogeneous cluster yields that value; a heterogeneous cluster
+yields the **minimum** across GPU nodes (the cap that holds whichever GPU a pod lands on, since the
+target GPU is unknown at admission), refreshed periodically. Set `PER_GPU_VRAM_MIB` to override
+(authoritative; disables autodetect). If the basis cannot be determined, `gpu-fraction` caps are
+skipped rather than guessed (`gpu-memory` pods are unaffected). Autodetect needs `get/list/watch` on
+nodes — granted by the chart's `webhook-clusterrole.yaml`.
+
+> Note: this controls **GPU memory** isolation only. GPU **compute** is still shared via the GPU's
+> default time-slicing (KAI OSS has no proportional/strict-fair compute time-slicing).
 
 ## Build
 
